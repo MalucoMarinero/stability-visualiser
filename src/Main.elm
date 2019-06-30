@@ -1,7 +1,14 @@
 import Svg exposing (..)
+import Html exposing (Html, p, div, text)
 import Svg.Attributes exposing (x1, y1, x2, y2, stroke, fill, width, height, viewBox, points)
+import Browser
+import Browser.Events
 import String
 import List
+import List.Extra
+import Debug
+import Task
+import Time
 
 type alias Vector2D = 
   { x : Float
@@ -40,7 +47,7 @@ list_to_vector2d floats = case floats of
   x1 :: rest -> {x = x1, y = 0}
 
 underwater_polygon : List Vector2D -> List Vector2D
-underwater_polygon points = List.map (\p -> {x = p.x, y = min p.y 250}) points
+underwater_polygon points = List.map (\p -> {x = p.x, y = max p.y 250}) points
 
 coord_to_string_point : Vector2D -> String
 coord_to_string_point pos = String.join "," [String.fromFloat pos.x, String.fromFloat pos.y]
@@ -50,6 +57,16 @@ coords_to_string_points coords = String.join " " (List.map coord_to_string_point
 
 flip_vertical : Vector2D -> Vector2D
 flip_vertical pos = {x = pos.x * 1, y = pos.y * -1}
+
+polygon_area : List Vector2D -> Float
+polygon_area points = let
+                          offsets = case points of
+                            [] -> []
+                            head :: tail -> List.Extra.zip points (List.append tail [head])
+                          x_y = List.foldl (\(u, d) acc -> acc + (u.x * d.y)) 0 offsets
+                          y_x = List.foldl (\(u, d) acc -> acc + (u.y * d.x)) 0 offsets
+                      in
+                         (x_y - y_x) / 2
 
 type Msg
   = Tick
@@ -62,32 +79,64 @@ type alias Model =
   , pos : {x : Float, y: Float}
   }
 
-init : Model
-init =
-  Model 200 {x=0, y=60} {x=250, y=340}
+init : () -> (Model, Cmd Msg)
+init _ =
+  ( Model 20000 {x=0, y=60} {x=250, y=340}
+  , Task.perform Tick
+  )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+  Time.every 1000 Tick
 
 
 
-main = view init
+update : Msg -> Model -> (Model, Cmd Msg)
+update msg model = (model, Task.perform Tick)
 
 
-view : Model -> Svg Msg
+main = Browser.element
+  { init = init
+  , subscriptions = subscriptions
+  , update = update
+  , view = view
+  }
+
+
+view : Model -> Html Msg
 view model =
-  svg
-    [ width "500"
-    , height "500"
-    , viewBox "0 0 500 500"
-    ]
-    [ line
-        [ x1 "0"
-        , y1 "250"
-        , x2 "500"
-        , y2 "250"
-        , stroke "blue"
-        ][]
-    , polyline
-        [ points (coords_to_string_points (List.map (\c -> (translate2d model.pos.x model.pos.y (flip_vertical c))) boat_shape))
-        , fill "green"
-        , stroke "red"
-        ][]
-    ]
+  let
+    boat = (List.map (\c -> (translate2d model.pos.x model.pos.y (flip_vertical c))) boat_shape)
+    boat_area = polygon_area boat
+    underwater_shape = underwater_polygon boat
+    underwater_area = polygon_area underwater_shape
+  in
+    div
+      [ ]
+      [ svg
+        [ width "500"
+        , height "500"
+        , viewBox "0 0 500 500"
+        ]
+        [ line
+            [ x1 "0"
+            , y1 "250"
+            , x2 "500"
+            , y2 "250"
+            , stroke "blue"
+            ][]
+        , polyline
+            [ points (coords_to_string_points boat)
+            , fill "green"
+            , stroke "red"
+            ][]
+        ]
+      , div
+        []
+        [ p [] [ text ("Gravity " ++ String.fromFloat model.weight) ]
+        , p [] [ text ("Bouyancy ") ]
+        , p [] [ text ("Whole Area " ++ String.fromFloat boat_area) ]
+        , p [] [ text ("Underwater Area " ++ String.fromFloat underwater_area) ]
+        ]
+      ]
