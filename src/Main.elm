@@ -1,6 +1,6 @@
 import Svg exposing (..)
 import Html exposing (Html, p, div, text)
-import Svg.Attributes exposing (x1, y1, x2, y2, stroke, fill, width, height, viewBox, points)
+import Svg.Attributes exposing (cx, cy, r, x1, y1, x2, y2, stroke, fill, width, height, viewBox, points)
 import Browser
 import Browser.Events
 import String
@@ -9,6 +9,7 @@ import List.Extra
 import Debug
 import Task
 import Time
+import Platform.Cmd
 
 type alias Vector2D = 
   { x : Float
@@ -46,6 +47,13 @@ list_to_vector2d floats = case floats of
   x1 :: y1 :: rest -> {x = x1, y = y1}
   x1 :: rest -> {x = x1, y = 0}
 
+vector_add : Vector2D -> Vector2D -> Vector2D
+vector_add v1 v2 = {x = v1.x + v2.x, y = v1.y + v2.y}
+vector_mult : Vector2D -> Float -> Vector2D
+vector_mult v m = {x = v.x * m, y = v.y * m}
+vector_div : Vector2D -> Float -> Vector2D
+vector_div v m = {x = v.x / m, y = v.y / m}
+
 underwater_polygon : List Vector2D -> List Vector2D
 underwater_polygon points = List.map (\p -> {x = p.x, y = max p.y 250}) points
 
@@ -68,32 +76,73 @@ polygon_area points = let
                       in
                          (x_y - y_x) / 2
 
+polygon_center : List Vector2D -> Vector2D
+polygon_center points = let
+                          ps = Maybe.withDefault [] (List.tail points)
+                          xs = List.map (\v -> v.x) ps |> List.foldl (+) 0
+                          ys = List.map (\v -> v.y) ps |> List.foldl (+) 0
+                          x = xs / toFloat (List.length ps)
+                          y = ys / toFloat (List.length ps)
+                        in
+                          {x=x, y=y}
+
+
 type Msg
-  = Tick
+  = TickDelta Float
   | NewWeight Float
   | NewCog Float Float
 
 type alias Model =
   { weight : Float
-  , cog : {x : Float, y: Float}
-  , pos : {x : Float, y: Float}
+  , rcog : Vector2D
+  , pos : Vector2D
+  , vel : Vector2D
+  , acob : Vector2D
+  , acof : Vector2D
   }
 
 init : () -> (Model, Cmd Msg)
 init _ =
-  ( Model 20000 {x=0, y=60} {x=250, y=340}
-  , Task.perform Tick
+  ( { weight = 20000
+    , rcog = {x=0, y=60}
+    , pos = {x=250, y=100}
+    , vel = {x=0, y=0}
+    , acob = {x=250, y=250}
+    , acof = {x=250, y=250}
+    }
+  , Platform.Cmd.none
   )
 
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-  Time.every 1000 Tick
+  Browser.Events.onAnimationFrameDelta TickDelta
 
 
 
 update : Msg -> Model -> (Model, Cmd Msg)
-update msg model = (model, Task.perform Tick)
+update msg model = case msg of
+  TickDelta delta ->
+    let
+      boat = (List.map (\c -> (translate2d model.pos.x model.pos.y (flip_vertical c))) boat_shape)
+      boat_area = polygon_area boat
+      underwater_shape = underwater_polygon boat
+      underwater_area = polygon_area underwater_shape
+      acob = (polygon_center underwater_shape)
+      down_force = {x = 0, y = model.weight}
+      buoyancy_force = {x = 0, y = underwater_area * -1}
+      d = delta / 50000
+      accel = (vector_add buoyancy_force down_force)
+      vel_mod = vector_mult (vector_add buoyancy_force down_force) d
+      new_vel = vector_add model.vel vel_mod
+      displacement = vector_add (vector_mult model.vel d) (vector_mult (vector_mult accel 0.5) d)
+      new_pos = vector_add model.pos displacement
+    in
+      (
+        {model | acob=acob, pos=new_pos, vel=new_vel},
+        Platform.Cmd.none
+      )
+  _ -> (model, Platform.Cmd.none)
 
 
 main = Browser.element
@@ -108,6 +157,7 @@ view : Model -> Html Msg
 view model =
   let
     boat = (List.map (\c -> (translate2d model.pos.x model.pos.y (flip_vertical c))) boat_shape)
+    acog = vector_add {x = model.pos.x, y = model.pos.y} (vector_mult model.rcog -1)
     boat_area = polygon_area boat
     underwater_shape = underwater_polygon boat
     underwater_area = polygon_area underwater_shape
@@ -119,24 +169,34 @@ view model =
         , height "500"
         , viewBox "0 0 500 500"
         ]
-        [ line
+        [ polyline
+            [ points (coords_to_string_points boat)
+            , fill "white"
+            , stroke "red"
+            ][]
+        , line
             [ x1 "0"
             , y1 "250"
             , x2 "500"
             , y2 "250"
             , stroke "blue"
             ][]
-        , polyline
-            [ points (coords_to_string_points boat)
-            , fill "green"
-            , stroke "red"
+        , circle
+            [ cx (String.fromFloat acog.x)
+            , cy (String.fromFloat acog.y)
+            , r "2"
+            , fill "red"
+            ][]
+        , circle
+            [ cx (String.fromFloat model.acob.x)
+            , cy (String.fromFloat model.acob.y)
+            , r "2"
+            , fill "blue"
             ][]
         ]
       , div
         []
         [ p [] [ text ("Gravity " ++ String.fromFloat model.weight) ]
-        , p [] [ text ("Bouyancy ") ]
-        , p [] [ text ("Whole Area " ++ String.fromFloat boat_area) ]
-        , p [] [ text ("Underwater Area " ++ String.fromFloat underwater_area) ]
+        , p [] [ text ("Bouyancy " ++ String.fromInt (round underwater_area)) ]
         ]
       ]
